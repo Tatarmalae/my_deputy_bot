@@ -1,0 +1,19 @@
+{
+  "name": "my_deputy_bot",
+  "version": "1.0.0",
+  "description": "My deputy bot",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "server": "nodemon app.js"
+  },
+  "keywords": [],
+  "author": "Rustam Syubkaev",
+  "license": "ISC",
+  "devDependencies": {
+    "nodemon": "^2.0.6"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.50.0"
+  }
+}
