@@ -4,16 +4,17 @@
   "description": "My deputy bot",
   "main": "app.js",
   "scripts": {
-    "start": "node app.js",
-    "server": "nodemon app.js"
+    "start": "node app.js"
   },
   "keywords": [],
   "author": "Rustam Syubkaev",
   "license": "ISC",
-  "devDependencies": {
-    "nodemon": "^2.0.6"
-  },
   "dependencies": {
-    "node-telegram-bot-api": "^0.50.0"
+    "dotenv": "^8.2.0",
+    "telegraf": "^3.38.0"
+  },
+  "devDependencies": {
+    "koa": "^2.13.0",
+    "koa-body": "^4.2.0"
   }
 }
