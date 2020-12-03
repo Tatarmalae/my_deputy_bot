@@ -10,7 +10,8 @@
   "author": "Rustam Syubkaev",
   "license": "ISC",
   "dependencies": {
-    "dotenv": "^8.2.0",
+    "config": "^3.3.3",
+    "mysql2": "^2.2.5",
     "telegraf": "^3.38.0"
   },
   "devDependencies": {
