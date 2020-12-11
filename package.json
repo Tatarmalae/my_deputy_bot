@@ -4,7 +4,7 @@
   "description": "My deputy bot",
   "main": "app.js",
   "scripts": {
-    "start": "node app.js"
+    "start": "nodemon app.js"
   },
   "keywords": [],
   "author": "Rustam Syubkaev",
@@ -12,6 +12,7 @@
   "dependencies": {
     "config": "^3.3.3",
     "mysql2": "^2.2.5",
+    "nodemon": "^2.0.6",
     "telegraf": "^3.38.0"
   },
   "devDependencies": {
