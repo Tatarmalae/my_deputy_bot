@@ -1,8 +1,10 @@
 const { Telegraf, Markup, Extra } = require('telegraf');
 const config = require('config');
+const logger = require('./errorHandler');
 const Koa = require('koa');
 const koaBody = require('koa-body');
-const mysql = require('mysql2');
+const pool = require('./mysqlPool');
+
 const addressData = require('./address.json');
 const partyData = require('./party.json');
 
@@ -10,10 +12,7 @@ const BOT_TOKEN = config.get('BOT_TOKEN') || '';
 const URL = config.get('URL') || '';
 const PORT = config.get('PORT') || 3000;
 
-const DB = config.get('DB');
-const SPHINX = config.get('SPHINX');
-const METADATA = config.get('METADATA');
-
+let metaID;
 let addressInfo = [];
 let deputyInfo = [];
 let partyInfo = [];
@@ -21,45 +20,61 @@ let partyInfo = [];
 const bot = new Telegraf(BOT_TOKEN, { telegram: { webhookReply: false } });
 
 bot.command('start', ({ reply }) => {
-  reply('Для начала поиска вашего депутата мне нужно получить ваш адрес в формате «Город, улица, дом». Номер квартиры вводить не надо!\n\nНапример: Казань, Декабристов, 10');
+  reply('Для начала поиска вашего депутата мне нужно получить ваш адрес в формате «Город, улица, дом». Номер квартиры вводить не надо!\n\nНапример: Казань, Декабристов, 10').then();
 });
 
+//Запись в БД данных пользователя и его запрос
 const setMetaData = (ctx) => {
-  const connectMetaData = mysql.createConnection(METADATA);
+  metaID = null;
+  const connectMetaData = pool.connectMetaData;
   const meta = {
     user_id: ctx.message.chat.id,
     first_name: ctx.message.chat.first_name,
     nick_name: ctx.message.chat.username,
-    text: ctx.message.text,
+    text: ctx.message.text
   };
-  connectMetaData.query(`SET NAMES utf8mb4`);
   return new Promise((resolve, reject) => {
     connectMetaData.query(
       `INSERT INTO meta SET ?`, meta,
       (err, results) => {
+        return err ? reject(err) : resolve(results.insertId);
+      }
+    );
+  });
+};
 
+//Обновление в БД запроса пользователя после выполненных действий
+const updateMetaData = (column_name, ctx) => {
+  const connectMetaData = pool.connectMetaData;
+  const meta = {
+    [column_name]: ctx
+  };
+  return new Promise((resolve, reject) => {
+    connectMetaData.query(
+      `UPDATE meta SET ? WHERE id=${metaID}`, meta,
+      (err, results) => {
         return err ? reject(err) : resolve(results);
       }
     );
-    connectMetaData.end();
   });
-}
+};
 
-//Поиск ID в таблице по введенному адресу
+//Поиск ID в индексе Sphinx по введенному адресу
 const getAddressID = (ctx) => {
   let addressID = [];
-  const connectSphinx = mysql.createConnection(SPHINX);
+  const connectSphinx = pool.connectSphinx;
   return new Promise((resolve, reject) => {
     connectSphinx.query(
       `SELECT * FROM UIK WHERE MATCH('${ctx}') LIMIT 10`,
       (err, results) => {
+        if (err) return reject(err.message);
+
         results.forEach(item => {
           addressID.push(item.id);
         });
-        return err ? reject(err) : resolve(addressID);
+        return resolve(addressID);
       }
     );
-    connectSphinx.end();
   });
 };
 
@@ -67,11 +82,13 @@ const getAddressID = (ctx) => {
 const getAddressInfo = (ctx) => {
   let addressButton = [];
   addressInfo = [];
-  const connectUIK = mysql.createConnection(DB);
+  const connectUIK = pool.connectDB;
   return new Promise((resolve, reject) => {
     connectUIK.query(
       `SELECT * FROM uik WHERE id IN (${ctx}) ORDER BY LENGTH(house), address`,
       (err, results) => {
+        if (err) return reject(err.message);
+
         results.forEach(item => {
           addressInfo.push(JSON.parse(JSON.stringify(item)));
 
@@ -79,10 +96,9 @@ const getAddressInfo = (ctx) => {
           address.splice(1, 1);// Удалим район
           addressButton.push(address.join(', '));// Склеим обратно в строку
         });
-        return err ? reject(err) : resolve(addressButton);
+        return resolve(addressButton);
       }
     );
-    connectUIK.end();
   });
 };
 
@@ -132,12 +148,19 @@ const searchPartyDeputy = (where, needle) => {
 };
 
 bot.on('text', async (ctx) => {
-  //const setMeta = setMetaData(ctx).then().catch();
+  await setMetaData(ctx).then(id => metaID = id).catch((err) => {
+    throw err;
+  });
 
   const message = ctx.message.text.replace(/[\/]/g, ' ');
-  const result = await getAddressID(message);
+  const result = await getAddressID(message).catch((err) => {
+    throw err;
+  });
+
   if (result.length > 0) {
-    const address = await getAddressInfo(result);
+    const address = await getAddressInfo(result).catch((err) => {
+      throw err;
+    });
     let inlineKeyboardAddress = [];
     address.forEach((item, index) => {
       inlineKeyboardAddress.push(Markup.callbackButton(`${item}`, `uik_${index}`));
@@ -153,6 +176,10 @@ bot.on('text', async (ctx) => {
 
 bot.action(/uik_[0-9]/, async (ctx) => {
   if (!addressInfo) return;
+
+  await updateMetaData('select_address', addressInfo[ctx.callbackQuery.data.match(/_[0-9]*/)[0].substr(1)]['address']).catch((err) => {
+    throw err;
+  });
 
   const uik = await addressInfo[ctx.callbackQuery.data.match(/_[0-9]*/)[0].substr(1)]['uik'];
   await ctx.answerCbQuery('⌛ Информация загружается ⌛').then(() => {
@@ -173,6 +200,10 @@ bot.action(/uik_[0-9]/, async (ctx) => {
       ctx.deleteMessage();
       return ctx.reply('🗺️ Выберите депутата:', keyboardDeputy);
     } else {
+      updateMetaData('select_deputy', addressData[uikID.indexes]['Ф.И.О. депутата']).catch((err) => {
+        throw err;
+      });
+
       const fio = addressData[uikID.indexes]['Ф.И.О. депутата'] ? '<b>' + addressData[uikID.indexes]['Ф.И.О. депутата'] + '</b>\n' : '';
       const position = addressData[uikID.indexes]['Должность, место работы'] ? addressData[uikID.indexes]['Должность, место работы'] + '\n\n' : '';
       const reception = addressData[uikID.indexes]['Ведет прием:'] ? '🗓 Ведет прием: ' + addressData[uikID.indexes]['Ведет прием:'] + '\n\n' : '';
@@ -184,7 +215,7 @@ bot.action(/uik_[0-9]/, async (ctx) => {
       //Найдём партии по № п/п депутата
       const numbPP = addressData[uikID.indexes]['№ п/п'];
       const partyID = searchParty(partyData, numbPP);
-      let partyText;
+      let partyText = '';
       let inlineKeyboardParty = [];
       let keyboardParty;
       if (partyID.indexes.length) {
@@ -210,15 +241,21 @@ bot.action(/uik_[0-9]/, async (ctx) => {
       ctx.deleteMessage();
       return ctx.reply(dataMessage, {
         parse_mode: 'HTML',
-        reply_markup: keyboardParty.reply_markup,
+        reply_markup: keyboardParty ? keyboardParty.reply_markup : null,
         disable_web_page_preview: true
-      }).catch((err) => console.log('!!!ERROR!!!', err.response.description));
+      }).catch((err) => {
+        throw err.response.description;
+      });
     }
   });
 });
 
 bot.action(/deputy_[0-9]/, async (ctx) => {
   if (!deputyInfo) return;
+
+  await updateMetaData('select_deputy', deputyInfo[ctx.callbackQuery.data.match(/_[0-9]*/)[0].substr(1)]['Ф.И.О. депутата']).catch((err) => {
+    throw err;
+  });
 
   const deputy = await deputyInfo[ctx.callbackQuery.data.match(/_[0-9]*/)[0].substr(1)];
   await ctx.answerCbQuery('⌛ Информация загружается ⌛').then(() => {
@@ -242,6 +279,10 @@ bot.action(/deputy_[0-9]/, async (ctx) => {
 bot.action(/party_[0-9]/, async (ctx) => {
   if (!partyInfo) return;
 
+  await updateMetaData('select_party', partyInfo[ctx.callbackQuery.data.match(/_[0-9]*/)[0].substr(1)]['Округ']).catch((err) => {
+    throw err;
+  });
+
   const party = await partyInfo[ctx.callbackQuery.data.match(/_[0-9]*/)[0].substr(1)];
   await ctx.answerCbQuery('⌛ Информация загружается ⌛').then(() => {
     const partyID = searchPartyDeputy(partyData, party['Округ']);
@@ -264,13 +305,17 @@ bot.action(/party_[0-9]/, async (ctx) => {
   });
 });
 
-bot.telegram.setWebhook(`${URL}/my_deputy_bot`);
+bot.catch((err, ctx) => {
+  logger.logError(`Error for ${ctx.updateType} ` + err).then();
+})
+
+bot.telegram.setWebhook(`${URL}/my_deputy_bot`).then();
 
 const app = new Koa();
 app.use(koaBody());
-app.use(async (ctx, next) => {
+app.use(async (ctx) => {
   if (ctx.method !== 'POST' || ctx.url !== '/my_deputy_bot') {
-    return next();
+    return;
   }
   await bot.handleUpdate(ctx.request.body, ctx.response);
   ctx.status = 200;
